@@ -1,0 +1,367 @@
+#include <Bounce2.h>
+#include <Keypad.h>
+#include <LiquidCrystal.h>
+
+//calling all variables need to be initialized
+const byte seconds=0;
+const byte minutes=0;
+const byte hours=0;
+const int doorpin=53;
+const int ledG=49;
+const int ledY=51;
+const int ledR=47;
+unsigned long blinkTime=0;
+unsigned long currentTime=0;
+unsigned long oldTime=0;
+int alarm=0;
+int disarmed=0;
+int delayState=0;
+int alarmCount=0;
+int armDelay=0;
+int timeDelay=0;
+int reset=0;
+int notready;             //variable to use for doorstate
+int doorread;
+int passFail=0;
+int armedState=0;
+const int buzzer=30;
+int count;
+int a;
+char keys;
+const String clearcode="0*C";
+const String passcode="01234";           
+String keyString="0";
+const String skipcode="0*B";
+int skip=0;
+const String armPass="0*A";
+//end initializing variables
+
+//LiquidCrystal setup
+LiquidCrystal lcd(15,16,17,18,19,20); //sets rs,enable, and d4-d7 to pins 8-13 respsectively and names the varible lcd
+//end LiquidCrytal setup
+
+//initializing keypad matrix
+const byte ROWS=4; //four rows
+const byte COLUMNS=4; //four columns
+//end initializing matrix
+
+//define the Keypad matrix by ROWS and COLUMNS
+char Keys[ROWS][COLUMNS]={
+  {'1','2','3','A'},
+  {'4','5','6','B'},
+  {'7','8','9','C'},
+  {'*','0','#','D'}
+};
+
+byte rowPins[ROWS]={0,8,2,3}; //sets ROWS pin to pins 0-3 skipping 1 and replacing that with 8
+byte colPins[COLUMNS]={4,5,6,7}; //sets COLUMNS pin to pins 4-7
+//end defining key matrix
+
+//Making the Keypad
+Keypad kpd=Keypad(makeKeymap(Keys), rowPins, colPins, ROWS, COLUMNS); //use kpd to call keymap fucntion and Keys is the keymap
+//end making Keypad
+
+//setting up bounce
+Bounce bouncer=Bounce();
+//end bounce setup
+ 
+void setup() {
+  Serial.begin(9600);
+  lcd.begin(16,1); //sets the LCD display output to 16 columns with one row.
+  a=15;            //sets a =15 so that it can interate and set all pinmodes the lcd will use as outputs.
+  if(a<=20){
+    pinMode(a,OUTPUT);
+    a=a+1;
+  }
+  pinMode(buzzer,OUTPUT); //sets buzzer pinout as pin 30
+  pinMode(doorpin,INPUT); //sets doorpin pin as pin 53
+  digitalWrite(doorpin,HIGH);//turns on internal resistor of doorpin to produce a normally high reading on this output pin
+  pinMode(ledG,OUTPUT);   //sets green led pin as pin49
+  pinMode(ledY,OUTPUT);   //sets yellow led as pin 51
+  pinMode(ledR,OUTPUT);   //sets red led as pin 47
+}
+
+void loop() {
+  while(reset!=1){                      //breaks while loop when reset=1
+    char keypress=kpd.getKey();
+    keyRetreival(keypress);             //calls void function define at end of code and inserts keypress as data. this allows for this function to be called in multiple occasions and not written each time 
+    bouncer.attach(53);                 //attaches bounce command to pin 52
+    bouncer.interval(5);                //sets a 5mSec interval for bounce command                                         
+    Serial.println(doorread);           //can remove this later, this is just for checking the input of the doorread pin to check for proper switch function
+    doorread=digitalRead(doorpin);      //reads the digital input of the doorpin and sets notready value according to value read.                                
+    if(doorread==0){ //can add other reads such as window read or back door read etc etc. so that alarm cannot be set until the house is secure.
+      notready=1;
+    }
+    else{
+      notready=0;
+    }
+    //start of LED section
+    if(notready==0 && alarm==0 && armedState==0 && delayState==0){ //turns on green led when door is closed and in base state (not armed/alarming)
+      digitalWrite(ledG,HIGH);
+      delay(1);
+      digitalWrite(ledG,LOW);
+    }
+    else{                                     //turns green led off when conditions are not met
+      digitalWrite(ledG,LOW);
+    }
+  
+    if(notready==1 && alarm==0){              //turns on yellow led when the door is open and alarm is off
+      digitalWrite(ledY,HIGH);
+      delay(1);
+      digitalWrite(ledY,LOW);
+    }
+    else{                                     //turns yellow led off when conditions are not met
+      digitalWrite(ledY,LOW);
+    }
+   
+    if(armedState==1){          //turns on red led when the alarm is armed
+      digitalWrite(ledR,HIGH);
+      delay(1);
+      digitalWrite(ledR,LOW);
+    }
+    else{                                     //turns red led off when conditions are not met
+      digitalWrite(ledR,LOW);
+    }
+
+    //end of LED section
+
+    //start of arming statement
+    if((keyString==armPass || keyString==skipcode) && notready==0){ //could replace this with a armrequest that increments to 1 inside of an if statment that checks the keystring for either or and then add it here (opens up possiblity for even more arming configurations).
+                            //once armPass is input this loop iterates and clears the lcd and current keystring and asks for a passcode. if the correct passcode is input the system begins to arm and sets armedState to 1.
+                            //If the incorrect passcode is input it asks for you to try again.
+                            //If the skipcode was used to enter this statement there will be no delay after the passcode is input.
+                            //If the door is open you cannot enter this loop
+                            //add blinking led for arming section (yellow).
+                            
+      if (keyString==skipcode){ //sets skip to 1 if the skipcode was input to allow for skipping of the delay
+        skip=1;
+      }
+      
+       keyString="0";
+       count=0;
+       lcd.clear();
+       lcd.print("enter passcode");
+       delay(1000);
+       lcd.clear();
+      while(armedState!=1){   //this loop iterates until armedState becomes 1
+        char keypress=kpd.getKey();
+        keyRetreival(keypress); 
+        
+        //start fail case
+        if(keyString!=passcode && count>3){
+          lcd.clear();
+          lcd.print("try again");
+          keyString="0";
+          count=0;
+          delay(1000);
+          lcd.clear();
+        }
+        //end fail case
+
+        //start pass case
+        if(keyString==passcode){  //this loop checks that keyString==passcode, if so everything in this if loop will iterate
+          oldTime=millis(); //as soon as the correct code is acknowledged, we save the time so that 30 seconds later we can leave the arming statement (30 second delay)
+          lcd.clear();
+          lcd.print("arming....");
+          delay(1000);
+          lcd.clear();
+          
+          while(currentTime<=oldTime+30000 && skip==0){ //this while loop will blink an LED on and off at a .5 second interval for 30 seconds as long as the skipcode was not used
+            
+            currentTime=millis(); //sets currentTime to the time that this statement was entered and renews upon each iteration
+            
+            if(currentTime>=blinkTime+500 && currentTime<=blinkTime+1000){ //compares to check that the current time is greater than or equal to 0.5seconds from start of statement and if so sets ledY to high
+              digitalWrite(ledY,HIGH);
+            }
+            if(currentTime>=blinkTime+1000){ //compares to check that the current time is greater than or equal to 1 second from start of statement and if so sets ledY to low
+             digitalWrite(ledY,LOW);
+             blinkTime=millis(); //sets blinkTime to current time so that the blinking can iterate again until the loop is broken
+            }
+          }
+          lcd.clear();               //once 30 seconds have passed the LCD display will be cleared along with the current KeyString and variable count whilst setting aremdState to 1
+          lcd.print("armed");
+          keyString="0";
+          count=0;
+          armedState=1;
+        }
+        //end pass case
+          
+      }
+    }
+    //end of arming statement
+
+    //start of security check
+    if(armedState==1 && doorread==0 && alarm==0){   //sets condition to trigger armed statement for a doortrip. can add more states to check multiple doors/windows. can replace doorread with notready and add all compnents such as windows and other doors to notready check so that alarm will go off when any parameter is breached.
+      delayState=1;
+    }
+    //end of security check
+    
+    //start of statment once door is tripped
+    if(delayState==1 && alarm==0){                  //starts delay state and clears variable count and keyString and will notify user that alarm is active and the code needs to be input
+      count=0;
+      keyString="0";
+      lcd.clear();
+      if(skip==1){ //auto-sets off alarm if door is tripped when skipcode is used because we are assuming that alarm is set to stay and door is not to be opened until resident leaves house. (you would most likely use this when sleeping at night or something of the like)
+        alarm=1;
+      }
+      if(skip!=1){ //continues regular path if skipcode was not input
+      lcd.print("alarm active");
+      delay(2000);
+      lcd.clear();
+      lcd.print("input code");
+      delay(2000);
+      lcd.clear();  
+      oldTime=millis(); //sets current time right before you are allowed to input keys so we can do a 30 second delay before alarm goes off.
+      currentTime=millis();//sets current time right before you are allowed to input keys
+      blinkTime=millis(); //does same as above two statements
+      }
+      while(disarmed!=1 && passFail!=3 && alarm!=1){    //this loop  will iterate for 30 seconds,3 attempts, or until the correct passcode is input. Failure to input the correct passcode in the time limit or given number of tries results in alarm being set to 1.
+        char keypress=kpd.getKey();
+        keyRetreival(keypress); 
+        
+        //led blinking statement
+        if(currentTime>=blinkTime+500 && currentTime<=blinkTime+1000){
+        digitalWrite(ledR,HIGH);
+        }
+        if(currentTime>=blinkTime+1000){
+        digitalWrite(ledR,LOW);
+        blinkTime=millis(); //sets new blink time so loop can reiterate until alarm goes off
+        }
+        //end led blinking statement
+
+        //passcode check statement
+        if(keyString==passcode){            //this loop will check that keyString is equal to the passcode, if so the delayState is reset and disarmed is set to 1, breaking the loop
+          disarmed=1;
+          delayState=0;
+          lcd.clear();
+          lcd.print("alarm disarmed");
+          delay(1000);
+          lcd.clear();
+      }
+      //end passcode check statement
+
+      //passFail check statement
+      if(count>=4&&keyString!=passcode){ //this loop will see that keyString and variable count is reset when the incorrect passcode is input and increment number of failed attempts by 1
+        passFail=passFail+1;
+        count=0;
+        keyString="0";
+        lcd.clear();
+        lcd.print("attempt failed");
+        delay(1000);
+        lcd.clear();
+      }
+      //end passfail check statement
+
+      //alarm fail check statement
+      if(passFail==3){              //if the number of failed attempts reaches 3, the while loop is broken and alarm state is set to 1 whilst delay state is reset
+        alarm=1;
+        delayState=0;
+      }
+      //end alarm fail check statement
+
+      //alarm time check statement
+      if(currentTime>=oldTime+30000){        //if 30 seconds have passed without the correct input code the alarm is set to 1 and the while loop is broken whilst delay state is reset
+        alarm=1;
+        delayState=0;
+      }
+      //end alarm time check statement
+      
+      currentTime=millis();//at end of loop for alarm statement, sets new time to be compared to old time for setting off alarm
+      }
+    }
+    //end of statement once door is tripped
+
+    //start doorcheck
+    if((keyString==armPass || keyString==skipcode) && notready==1){      //tells user door is open when the armstring or skipcode is input and resets the stored keystring, can add other components and if statements for each component insdie this one to check for other things such as windows, backdoor, garage, etc etc. and it will tell you which is open.
+      lcd.clear();
+      lcd.print("door open");
+      delay(1000);
+      lcd.clear();
+      keyString="0";
+      count=0;
+    }
+    //end doorcheck
+
+    //alarm check
+    if(alarm==1){ //sounds alarm if alarm==1
+      if(currentTime>=blinkTime+100 && currentTime<=blinkTime+200){
+      digitalWrite(buzzer,HIGH);
+      }
+      if(currentTime>=blinkTime+200){
+      digitalWrite(buzzer,LOW);
+      blinkTime=millis();
+      }
+      //end alarm check
+    }
+
+     //start passcode check
+     if(keyString==passcode){            //resets all states to disarmed when the keyString is equal to the passcode
+      digitalWrite(buzzer,LOW);         //this will set the buzzer to low to make sure it turns off when the passcode is input
+      lcd.clear();
+      lcd.print("reseting states....");
+      delay(1000);
+      lcd.clear();
+      keyString="0";
+      reset=1;
+    }
+    //end passcode check
+
+     //keystring check
+    if(keyString==clearcode || count==4){       //resets stored keystring when keystring=clearcode or when the keystring is 4 presses, this must go last to ensure the passcode check can check the keystring before resetting
+      lcd.clear();
+      keyString="0";
+      count=0;
+    }
+    //end keystring check
+    
+  currentTime=millis(); //sets currenttime to time seen at the end of the loop
+  
+  }
+  //resets all variables when while loop is broken
+  keyString="0"; 
+  armedState=0;
+  passFail=0;
+  delayState=0;
+  reset=0;
+  armDelay=0;
+  disarmed=0;
+  alarm=0;
+  alarmCount=0;
+  blinkTime=0;
+  currentTime=0;
+  oldTime=0;
+  blinkTime=0;
+  timeDelay=0;
+  skip=0;
+  lcd.print("reset successful");
+  delay(2000);
+  lcd.clear();
+      //think about adding if loop that will reset important things such as the lcd screen or the keystring when conditions to break the loop are met. EXAMPLE BELOW
+                      //if(keyString==armPass||someothercondition||someothercondtion to break while loop||etc. etc.){
+                      //lcd.clear(); //clears the lcd
+                      //keyString="0"; //clears the keyString for use in the next loop (this should be done upon the exit of each loop and maybe even more often than that)
+                      //add more resets for variables as needed for the next loop
+                      //and print instructions for next loop
+}
+
+//email:william.b.webber@gmail.com
+//think about using internal counter because it runs in parallel with the code
+//idea is to start the internal counter in initial if statement when door is tripped and add condition for internal component such as internalclock!=(whatever the equivalent of 30 seconds is here)
+//for next monday:
+//add led for armed statement and add proper 30 second delay for arming statement
+//arduino on/off swtich wiring tutorial
+
+//this is void fucntion for retrieving keypresses to minimize lines of code since this function is used in multiple loops
+void keyRetreival (char data){                                    //was having issues with the output not matching the keypad input, it was concluded that the datatype was wrong and we were trying to force a int output using a character input. changing int to char fixed the issue                                                              
+    if(data!=NO_KEY){                                             //prints keypress to lcd and Serial monitor and lcd screen with beeps on each press
+      Serial.println(data);
+      lcd.print(data);
+      keyString=keyString+data;
+      count=count+1;                
+      digitalWrite(buzzer,HIGH);
+      delay(100);
+      digitalWrite(buzzer,LOW);
+      }
+}
+//end setup of void function
+
